@@ -1,10 +1,14 @@
+//! Thread-Safe template for a ring buffer with std compatible reader and writer and safety checks 
+
 const std = @import("std"); 
 
+/// Options for the ring buffer template
 pub const RingBufferOptions = struct {
     ContainedType: type = u8,
     thread_safe: bool = false,
 };
 
+/// Ring buffer template
 pub fn RingBuffer(comptime options: RingBufferOptions) type {
     const T = options.ContainedType;
     const MutexT = if (options.thread_safe) std.Thread.Mutex else std.Thread.Mutex.Dummy;
@@ -18,6 +22,7 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
 
         const Rb = @This();
 
+        /// Creates a new ring buffer from a user provided buffer
         pub fn init(buf: []T) Rb {
             return .{
                 .mutex = .{},
@@ -25,12 +30,15 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             };
         }
 
+        /// Errors that can occur when writing to the buffer
         pub const WriteError = error{RingBufferFull};
-
+        /// STD compatible writer for the ring buffer
         pub const Writer = std.io.Writer(*Rb, WriteError, writeFn);
+        /// Returns the writer for the ring buffer
         pub fn writer(self: *Rb) Writer {
             return .{ .context = self };
         }
+        /// Write function for the STD writer
         fn writeFn(self: *Rb, m: []const u8) WriteError!usize {
             if (T != u8)
                 @compileError("Writer and Reader interfaces only support u8");
@@ -77,6 +85,7 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             return writable;
         }
 
+        /// Pushes a single element to the ring buffer
         pub fn push(self: *Rb, value: T) WriteError!void {
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -92,12 +101,15 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             self.used += 1;
         }
 
+        /// Errors that can occur when reading from the buffer (won't be the same when using the reader interface)
         pub const ReadError = error{RingBufferEmpty};
-
+        /// STD compatible reader for the ring buffer
         pub const Reader = std.io.Reader(*Rb, error{}, readFn);
+        /// Returns the reader for the ring buffer
         pub fn reader(self: *Rb) Reader {
             return .{ .context = self };
         }
+        /// Read function for the STD reader
         fn readFn(self: *Rb, b: []u8) error{}!usize {
             if (T != u8)
                 @compileError("Writer and Reader interfaces only support u8");
@@ -142,6 +154,7 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             return readable;
         }
 
+        /// Pops a single element from the ring buffer
         pub fn pop(self: *Rb) ReadError!T {
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -159,13 +172,14 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             return value;
         }
 
+        /// Returns the number of elements in the buffer
         pub fn getUsedSpace(self: *Rb) usize {
             self.mutex.lock();
             defer self.mutex.unlock();
 
             return self.used;
         }
-
+        /// Returns the number of elements that can be written to the buffer
         pub fn getFreeSpace(self: *Rb) usize {
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -173,9 +187,9 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             return self.buffer.len - self.used;
         }
 
-        // TODO: implement interfaces for other contained types than u8
-
         //NOT THREAD SAFE
+        // TODO: make a "dump" function instead
+        /// Debug-describes the ring buffer (only if it's a u8 buffer)
         pub fn format(
             self: @This(),
             comptime fmt: []const u8,

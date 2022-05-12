@@ -187,20 +187,31 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             return self.buffer.len - self.used;
         }
 
-        //NOT THREAD SAFE
-        // TODO: make a "dump" function instead
-        /// Debug-describes the ring buffer (only if it's a u8 buffer)
-        pub fn format(
-            self: @This(),
-            comptime fmt: []const u8,
-            opt: std.fmt.FormatOptions,
-            w: anytype
-        ) !void {
-            _ = opt;
-            _ = fmt;
-
+        /// Empties the buffer into an writer stream (or at least push as much as possible)
+        pub fn flushToStream(self: *Rb, stream: anytype) !void {
             if (T != u8)
-                @compileError("Format only implemented for u8 as of now");
+                @compileError("Only implemented for u8");
+
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            
+        }
+
+        /// Dumps the contents of the ring buffer to `stderr`.
+        pub fn dump(self: *Self) void {
+            self.dumpToStream(std.io.getStdErr().writer()) catch return;
+        }
+
+        /// Dumps the contents of the ring buffer to `stream`.
+        pub fn dumpToStream(self: *Self, stream: anytype) !void {
+            if (T != u8)
+                @compileError("Only implemented for u8 as of now");
+
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            const w = stream;
 
             try w.writeAll("\n[");
             for (self.buffer) |byte| {

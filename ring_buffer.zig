@@ -25,6 +25,12 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             return .{ .mutex = .{}, .buffer = buf };
         }
 
+        pub fn clear(self: *Rb) void {
+            self.tail = 0;
+            self.head = 0;
+            self.used = 0;
+        }
+
         /// Errors that can occur when writing to the buffer
         pub const WriteError = error{RingBufferFull};
         /// STD compatible writer for the ring buffer
@@ -180,15 +186,23 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             return self.buffer.len - self.used;
         }
 
-        /// Empties the buffer into an writer stream (or at least push as much as possible)
-        pub fn flushToStream(self: *Rb, stream: anytype) !void {
+        /// Empties the buffer into a writer
+        pub fn flushEverythingToWriter(self: *Rb, stream: anytype) !void {
             if (T != u8)
                 @compileError("Only implemented for u8");
 
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            _ = stream; // TODO: flushToStream
+            if (self.head > self.tail) {
+                // the readable data is contiguous
+                try stream.writeAll(self.buffer[self.tail..self.head]);
+            } else {
+                // the readable data is not contiguous
+                try stream.writeAll(self.buffer[self.tail..]);
+                try stream.writeAll(self.buffer[0..self.head]);
+            }
+            self.clear();
         }
 
         /// Dumps the contents of the ring buffer to `stderr`.
@@ -392,6 +406,20 @@ test "RingBuffer: push and pop" {
         try tst.expectEqual(i, try rb.pop());
     }
     try tst.expectError(error.RingBufferEmpty, rb.pop());
+}
+
+test "RingBuffer: flush everything to writer" {
+    var buf: [10]u8 = undefined;
+    var rb = RingBuffer(.{}).init(&buf);
+
+    var dest = try std.BoundedArray(u8, 20).init(0);
+
+    try rb.writer().writeAll("Hello,");
+    try rb.flushEverythingToWriter(dest.writer());
+    try rb.writer().writeAll(" woooorld");
+    try rb.flushEverythingToWriter(dest.writer());
+
+    try expectEqualSlicesPrint("Hello, woooorld", dest.slice());
 }
 
 fn expectEqualSlicesPrint(expected: []const u8, actual: []const u8) !void {

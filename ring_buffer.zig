@@ -1,20 +1,18 @@
-//! Thread-Safe template for a ring buffer with std compatible reader and writer and safety checks 
+//! Thread-Safe template for a ring buffer with std compatible reader and writer and safety checks
 
-const std = @import("std"); 
+const std = @import("std");
 
 /// Options for the ring buffer template
 pub const RingBufferOptions = struct {
-    ContainedType: type = u8,
-    thread_safe: bool = false,
+    T: type = u8,
 };
 
 /// Ring buffer template
 pub fn RingBuffer(comptime options: RingBufferOptions) type {
-    const T = options.ContainedType;
-    const MutexT = if (options.thread_safe) std.Thread.Mutex else std.Thread.Mutex.Dummy;
+    const T = options.T;
 
     return struct {
-        mutex: MutexT,
+        mutex: std.Thread.Mutex,
         buffer: []T,
         head: usize = 0,
         tail: usize = 0,
@@ -24,10 +22,7 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
 
         /// Creates a new ring buffer from a user provided buffer
         pub fn init(buf: []T) Rb {
-            return .{
-                .mutex = .{},
-                .buffer = buf
-            };
+            return .{ .mutex = .{}, .buffer = buf };
         }
 
         /// Errors that can occur when writing to the buffer
@@ -48,7 +43,6 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
 
             self.mutex.lock();
             defer self.mutex.unlock();
-
 
             const free_space = self.buffer.len - self.used;
             if (free_space == 0)
@@ -95,7 +89,7 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
 
             if (self.head == self.buffer.len)
                 self.head = 0;
-            
+
             self.buffer[self.head] = value;
             self.head += 1;
             self.used += 1;
@@ -120,7 +114,6 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-
             const used_space = self.used;
             if (used_space == 0)
                 return 0;
@@ -134,7 +127,7 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             } else {
                 // the readable data is not contiguous
                 const before_wrap = self.buffer.len - self.tail;
-                
+
                 if (before_wrap >= readable) {
                     // things can be read without wrapping
                     std.mem.copy(u8, b, self.buffer[self.tail..(self.tail + readable)]);
@@ -161,7 +154,7 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
 
             if (self.used == 0)
                 return error.RingBufferEmpty;
-            
+
             if (self.tail == self.buffer.len)
                 self.tail = 0;
 
@@ -195,16 +188,18 @@ pub fn RingBuffer(comptime options: RingBufferOptions) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            
+            _ = stream; // TODO: flushToStream
         }
 
         /// Dumps the contents of the ring buffer to `stderr`.
-        pub fn dump(self: *Self) void {
+        /// In a formatted way that helps with debugging
+        pub fn dump(self: *Rb) void {
             self.dumpToStream(std.io.getStdErr().writer()) catch return;
         }
 
-        /// Dumps the contents of the ring buffer to `stream`.
-        pub fn dumpToStream(self: *Self, stream: anytype) !void {
+        /// Dumps the contents of the ring buffer to `stream`
+        /// In a formatted way that helps with debugging
+        pub fn dumpToStream(self: *Rb, stream: anytype) !void {
             if (T != u8)
                 @compileError("Only implemented for u8 as of now");
 
@@ -275,8 +270,6 @@ test "RingBuffer: writing" {
     try tst.expectEqual(@as(usize, 10), rb.used);
     try tst.expectEqual(@as(usize, 0), rb.getFreeSpace());
 
-    //std.debug.print("{}\n", .{rb});
-
     rb = RingBuffer(.{}){ .buffer = &buf, .head = 4, .tail = 3, .used = 1, .mutex = .{} };
 
     _ = try w.write("abcdefgh");
@@ -309,24 +302,18 @@ test "RingBuffer: full buffer read" {
     try tst.expectEqual(@as(usize, 10), rb.used);
     try tst.expectEqual(@as(usize, 0), rb.getFreeSpace());
 
-    //std.debug.print("{}", .{rb});
-
     {
         var rd_buf: [10]u8 = undefined;
-        const len = try r.readAll(rd_buf[0..10]);
+        const len = try r.readAll(&rd_buf);
         try tst.expectEqual(len, 10);
         try tst.expectEqualStrings("0123456789", &rd_buf);
     }
-
-    //std.debug.print("{}", .{rb});
 
     // Now, for something more tricky, a scenario where the head and tail are the same and are not at the beginning of the array
 
     _ = try w.write("0123456");
     _ = try r.read(buf[0..5]);
     _ = try w.write("01234567");
-
-    //std.debug.print("{}", .{rb});
 
     {
         var rd_buf: [10]u8 = undefined;
@@ -342,8 +329,6 @@ test "RingBuffer: full buffer read" {
         try tst.expectEqual(len, 1);
         try tst.expectEqual(rd_buf[0], '7');
     }
-
-    //std.debug.print("{}", .{rb});
 }
 
 test "RingBuffer: random writing and reading" {
@@ -362,7 +347,7 @@ test "RingBuffer: random writing and reading" {
     var temp: [BUF_SIZE]u8 = undefined;
 
     var feeder_array: [2048]u8 = undefined;
-    rand.bytes(feeder_array[0..2048]);
+    rand.bytes(&feeder_array);
 
     var feeder_write_idx: usize = 0;
     var feeder_read_idx: usize = 0;
@@ -370,19 +355,14 @@ test "RingBuffer: random writing and reading" {
     while (i < 100) : (i += 1) {
         const free = rb.getFreeSpace();
         const to_write = rand.uintAtMost(usize, free);
-        _ = try w.writeAll(feeder_array[feeder_write_idx..to_write+feeder_write_idx]);
-        
-        //std.debug.print("\nWrote {} bytes: {}", .{to_write, rb});
+        _ = try w.writeAll(feeder_array[feeder_write_idx .. to_write + feeder_write_idx]);
 
         const used = rb.used;
         const to_read = rand.uintAtMost(usize, used);
         const len = try r.readAll(temp[0..to_read]);
 
-        //std.debug.print("Used : {}\n", .{used});
-        //std.debug.print("Read {} bytes: {}", .{to_read, rb});
-        
         try std.testing.expectEqual(to_read, len);
-        try expectEqualSlicesPrint(temp[0..to_read], feeder_array[feeder_read_idx..to_read+feeder_read_idx]);
+        try expectEqualSlicesPrint(temp[0..to_read], feeder_array[feeder_read_idx .. to_read + feeder_read_idx]);
 
         feeder_write_idx += to_write;
         feeder_read_idx += to_read;
@@ -393,7 +373,7 @@ test "RingBuffer: push and pop" {
     const tst = std.testing;
 
     var buf: [10]i9 = undefined;
-    var rb = RingBuffer(.{ .ContainedType = i9 }).init(&buf);
+    var rb = RingBuffer(.{ .T = i9 }).init(&buf);
 
     try rb.push(255);
     try tst.expectEqual(@as(usize, 1), rb.used);
@@ -419,6 +399,7 @@ fn expectEqualSlicesPrint(expected: []const u8, actual: []const u8) !void {
         std.debug.print("slice lengths differ. expected {d}, found {d}\n", .{ expected.len, actual.len });
         return error.TestExpectedEqual;
     }
+
     var i: usize = 0;
     while (i < expected.len) : (i += 1) {
         if (expected[i] != actual[i]) {
